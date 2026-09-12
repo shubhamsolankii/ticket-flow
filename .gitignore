@@ -1,0 +1,222 @@
+# ============================================================
+# TicketFlow — Root .gitignore
+# Covers: Java 21, Maven, Spring Boot 3.x, IntelliJ IDEA,
+#         VS Code, Docker, Kubernetes, macOS, Linux, Windows
+# ============================================================
+
+
+# ============================================================
+# SECRETS & CREDENTIALS — NEVER COMMIT THESE
+# ============================================================
+*.env
+.env
+.env.*
+!.env.example
+application-secrets.yml
+application-secrets.properties
+*-secrets.yml
+*-secrets.properties
+secrets/
+*.pem
+*.key
+*.p12
+*.jks
+*.pfx
+*.keystore
+*.truststore
+serviceAccountKey.json
+gcp-credentials.json
+aws-credentials
+.aws/credentials
+
+
+# ============================================================
+# MAVEN
+# ============================================================
+target/
+!.mvn/wrapper/maven-wrapper.jar
+!**/src/main/**/target/
+!**/src/test/**/target/
+.mvn/timing.properties
+.mvn/jvm.config
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+dependency-reduced-pom.xml
+buildNumber.properties
+
+
+# ============================================================
+# JAVA
+# ============================================================
+*.class
+*.jar
+*.war
+*.ear
+*.nar
+hs_err_pid*
+replay_pid*
+
+
+# ============================================================
+# SPRING BOOT
+# ============================================================
+# Local override files — developer-specific config that must
+# never reach version control (ports, local DB URLs, API keys)
+application-local.yml
+application-local.properties
+application-dev-local.yml
+application-dev-local.properties
+
+# Spring Boot exploded JAR working directory
+spring-shell.log
+
+
+# ============================================================
+# LOGS
+# ============================================================
+logs/
+*.log
+*.log.*
+log/
+
+
+# ============================================================
+# INTELLIJ IDEA
+# ============================================================
+.idea/
+*.iws
+*.iml
+*.ipr
+out/
+.idea_modules/
+atlassian-ide-plugin.xml
+com_crashlytics_export_strings.xml
+crashlytics.properties
+crashlytics-build.properties
+fabric.properties
+
+
+# ============================================================
+# VS CODE
+# ============================================================
+.vscode/
+!.vscode/extensions.json
+!.vscode/settings.json.example
+*.code-workspace
+
+
+# ============================================================
+# ECLIPSE
+# ============================================================
+.apt_generated
+.classpath
+.factorypath
+.project
+.settings
+.springBeans
+.sts4-cache
+bin/
+!**/src/main/**/bin/
+!**/src/test/**/bin/
+
+
+# ============================================================
+# DOCKER
+# ============================================================
+# Never commit override files — they contain local port
+# bindings, volume mounts, and dev-only service configs
+docker-compose.override.yml
+docker-compose.local.yml
+
+# Docker build context artifacts
+.dockerignore.local
+
+
+# ============================================================
+# KUBERNETES
+# ============================================================
+# Generated kubeconfig or local cluster configs
+kubeconfig
+kubeconfig.yaml
+*.kubeconfig
+
+# Helm chart lock files and local values overrides
+charts/
+*.lock
+values-local.yaml
+values-local.yml
+values-secrets.yaml
+values-secrets.yml
+
+
+# ============================================================
+# TERRAFORM (if infra-as-code lives in this repo)
+# ============================================================
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+
+# ============================================================
+# SONARQUBE
+# ============================================================
+.sonar/
+.scannerwork/
+
+
+# ============================================================
+# OPERATING SYSTEM
+# ============================================================
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+.fseventsd
+.TemporaryItems
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptdata
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.nfs*
+
+
+# ============================================================
+# TESTCONTAINERS
+# ============================================================
+# Testcontainers writes a local properties file on first run
+.testcontainers.properties
+
+
+# ============================================================
+# MISC TOOLS
+# ============================================================
+.gradle/
+*.swp
+*.swo
+.cache/
+.yarn/
+node_modules/
+npm-debug.log*
