@@ -1,0 +1,245 @@
+# =============================================================================
+# auth-service — Base Application Configuration
+# Profile: default (local development)
+#
+# Secrets (DB password, Redis password, JWT private key) are provided via:
+#   Local dev  → docker-compose environment variables
+#   Staging    → Config Server (private Git repo) + K8s Secrets
+#   Production → Config Server (private Git repo) + K8s Secrets
+#
+# This file contains ZERO secrets. It is safe to commit.
+# =============================================================================
+
+server:
+  port: 8081
+  # Compress HTTP responses above 2KB — reduces bandwidth at 100K RPS
+  compression:
+    enabled: true
+    min-response-size: 2048
+  # Return structured error body on unhandled exceptions (our GlobalExceptionHandler
+  # overrides this for known errors, but this catches anything that slips through)
+  error:
+    include-message: never       # never expose internal exception messages to clients
+    include-binding-errors: never
+    include-stacktrace: never    # stack traces are logged, never returned to caller
+
+spring:
+  application:
+    name: auth-service           # Used by Eureka, Config Server, and distributed tracing
+
+  # ===========================================================================
+  # VIRTUAL THREADS (Java 21 + Spring Boot 3.2+)
+  # Switches Tomcat from platform thread pool to virtual threads.
+  # Impact: handles 100K concurrent requests without thread pool tuning.
+  # Cost: zero — virtual threads are ~1KB heap vs ~1MB for platform threads.
+  # ===========================================================================
+  threads:
+    virtual:
+      enabled: true
+
+  # ===========================================================================
+  # DATASOURCE — PostgreSQL (auth_db)
+  # Credentials injected via environment variables in all environments.
+  # Local dev: set via docker-compose.yml environment block.
+  # Prod: set via K8s Secret mounted as env vars.
+  # ===========================================================================
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/auth_db}
+    username: ${DB_USERNAME:auth_user}
+    password: ${DB_PASSWORD:auth_pass}
+    driver-class-name: org.postgresql.Driver
+
+    # -------------------------------------------------------------------------
+    # HikariCP Connection Pool
+    # System design Section 5: max 20 connections per pod.
+    # 10 pods × 20 connections = 200 total → within PostgreSQL max_connections.
+    # -------------------------------------------------------------------------
+    hikari:
+      pool-name: AuthServiceHikariPool
+      maximum-pool-size: 20
+      minimum-idle: 5            # keep 5 connections warm — avoids cold-start latency
+      idle-timeout: 300000       # evict idle connections after 5 minutes
+      connection-timeout: 20000  # fail fast if pool exhausted — 20s, not the default 30s
+      max-lifetime: 1800000      # recycle connections every 30 min (avoids stale TCP)
+      # Validate connection before handing it to the application.
+      # Prevents "connection closed" errors after DB failover.
+      connection-test-query: SELECT 1
+
+  # ===========================================================================
+  # JPA / HIBERNATE
+  # ===========================================================================
+  jpa:
+    database-platform: org.hibernate.dialect.PostgreSQLDialect
+    hibernate:
+      # CRITICAL: Flyway owns schema. Hibernate only validates, never modifies.
+      # 'validate' crashes the service on startup if entity ↔ schema mismatch.
+      # This is correct behaviour — fail fast, not silently corrupt data.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        # Improves JDBC batch insert performance.
+        # At 100K bookings/min, batch inserts matter.
+        jdbc:
+          batch_size: 25
+          order_inserts: true
+          order_updates: true
+        # Prevents Hibernate from quoting every identifier.
+        # Unquoted identifiers are case-insensitive in PostgreSQL — simpler SQL logs.
+        globally_quoted_identifiers: false
+    # CRITICAL: false prevents Hibernate from holding DB connections open
+    # for the entire HTTP request lifecycle. See design decisions above.
+    open-in-view: false
+    show-sql: false              # never true in prod — see design decisions above
+
+  # ===========================================================================
+  # FLYWAY — Schema Migration
+  # Flyway runs before the application context fully starts.
+  # It reads scripts from src/main/resources/db/migration/ in version order.
+  # Naming convention: V{version}__{description}.sql
+  # Example: V1__create_auth_credentials_table.sql
+  # ===========================================================================
+  flyway:
+    enabled: true
+    baseline-on-migrate: true    # safe for first run on an existing (empty) DB
+    locations: classpath:db/migration
+    # Flyway uses its own connection — separate from HikariCP pool above.
+    # It uses the same datasource URL/credentials.
+
+  # ===========================================================================
+  # REDIS
+  # Used by auth-service for: OTP storage (5-min TTL), token blacklist.
+  # Lettuce client (non-blocking) is autoconfigured by spring-boot-starter-data-redis.
+  # ===========================================================================
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}   # empty default for local dev without auth
+      # Connection pool for Lettuce (uses Netty under the hood)
+      lettuce:
+        pool:
+          max-active: 20             # max concurrent Redis connections
+          max-idle: 10
+          min-idle: 2
+          max-wait: -1ms             # block indefinitely rather than fail fast
+          # Redis calls are sub-millisecond; contention is rare
+
+  # ===========================================================================
+  # KAFKA — PRODUCER ONLY
+  # auth-service publishes one event: user.registered
+  # No consumer configuration — auth-service never consumes from Kafka.
+  # ===========================================================================
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      # Strongest durability guarantee: all in-sync replicas must acknowledge.
+      # At 3-replica Kafka cluster, this means 3 brokers confirm the write.
+      # Tradeoff: slightly higher latency vs acks=1, but zero data loss.
+      acks: all
+      # Retry up to 3 times on transient broker failures.
+      retries: 3
+      # Batch producer records for up to 16KB before sending.
+      # auth-service event volume is low, so batching has minimal effect here,
+      # but it's the correct default for all Kafka producers in this system.
+      batch-size: 16384
+      # Wait up to 5ms to fill a batch before sending — minor latency tradeoff
+      # for throughput. Irrelevant at auth-service's low event rate.
+      properties:
+        linger.ms: 5
+        # Enable idempotent producer: guarantees exactly-once delivery to Kafka.
+        # Required for our user.registered event — duplicate user creation is bad.
+        enable.idempotence: true
+        # Must be 1 when idempotence is enabled (Kafka constraint).
+        max.in.flight.requests.per.connection: 1
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+  # ===========================================================================
+  # SPRING SECURITY
+  # Disabling the auto-generated security password log line.
+  # We configure Security fully in SecurityConfig (added in Feature 2 when
+  # we need JWT validation). For Feature 1 (register endpoint), the endpoint
+  # must be public — SecurityConfig will handle that.
+  # ===========================================================================
+  security:
+    user:
+      # Overrides the random password Boot generates for the default user.
+      # Irrelevant once we configure SecurityConfig, but suppresses the
+      # "Using generated security password: ..." log line during dev.
+      password: disabled
+
+# =============================================================================
+# ACTUATOR — Health & Metrics
+# Exposes /actuator/health for K8s liveness/readiness probes.
+# Exposes /actuator/prometheus for Prometheus scraping.
+# Everything else is locked down — never expose /actuator/env or /actuator/beans
+# in production (they leak config values and class names).
+# =============================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus, info
+      base-path: /actuator
+  endpoint:
+    health:
+      # 'always' shows UP/DOWN details — useful for K8s readiness probe.
+      # In prod you may want 'when-authorized' to hide component details from
+      # unauthenticated callers. 'always' is fine for this stage.
+      show-details: always
+    prometheus:
+      enabled: true
+  # Exposes readiness and liveness as separate health groups.
+  # K8s probes:
+  #   Liveness:  GET /actuator/health/liveness  — is the app alive?
+  #   Readiness: GET /actuator/health/readiness — is the app ready for traffic?
+  health:
+    livenessstate:
+      enabled: true
+    readinessstate:
+      enabled: true
+  # Prometheus metrics export
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+  # Attach service name to all metrics — visible in Grafana dashboards
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+# =============================================================================
+# OPENTELEMETRY — Distributed Tracing
+# Exports spans to Jaeger via OTLP (OpenTelemetry Protocol).
+# Jaeger endpoint is the OTel Collector, which fans out to Jaeger + any
+# other backend we add later (Tempo, Honeycomb, etc).
+# =============================================================================
+otel:
+  exporter:
+    otlp:
+      endpoint: ${OTEL_EXPORTER_OTLP_ENDPOINT:http://localhost:4318}
+  service:
+    name: ${spring.application.name}
+  # Sample 100% of traces in local dev. In prod, set to 0.01 (1%).
+  # 100% sampling at 100K RPS would saturate Jaeger — 1% is standard.
+  traces:
+    sampler:
+      probability: ${OTEL_SAMPLER_PROBABILITY:1.0}
+
+# =============================================================================
+# LOGGING
+# Structured JSON logging is configured in logback-spring.xml (added later).
+# For now: INFO level for our code, WARN for framework noise.
+# =============================================================================
+logging:
+  level:
+    root: WARN
+    com.ticketflow: INFO
+    # Set DEBUG temporarily when debugging Spring Security filter chain.
+    # NEVER leave DEBUG on in prod — it logs every security decision.
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+    # Flyway logs its migration steps at INFO — useful to see on startup.
+    org.flywaydb: INFO
+    # HikariCP logs pool stats — WARN in prod, INFO for local debugging.
+    com.zaxxer.hikari: WARN

@@ -14,7 +14,7 @@
     </parent>
 
     <groupId>com.ticketflow</groupId>
-    <artifactId>auth-service</artifactId>
+    <artifactId>authservice</artifactId>
     <version>0.0.1-SNAPSHOT</version>
     <name>auth-service</name>
     <description>TicketFlow Auth Service — credentials, tokens, sessions</description>
