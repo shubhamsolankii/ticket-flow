@@ -63,7 +63,7 @@ public class AuthService {
      */
 
      @Transactional(isolation = Isolation.READ_COMMITTED)
-     public RegisterResponseDto registerResponseDto(RegisterRequestDto dto){
+     public RegisterResponseDto register(RegisterRequestDto dto){
          // Normalize email: lowercase + strip whitespace.
          // Prevents aryan@example.com and Aryan@Example.com being two accounts.
          String email = dto.email().toLowerCase().strip();
