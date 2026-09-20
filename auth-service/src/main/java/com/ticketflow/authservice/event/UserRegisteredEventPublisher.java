@@ -73,7 +73,7 @@ public class UserRegisteredEventPublisher {
                                 result.getRecordMetadata().offset()
                         );
                     }
-        })
+        });
 
     }
 }

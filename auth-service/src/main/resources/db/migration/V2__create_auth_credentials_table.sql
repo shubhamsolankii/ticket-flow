@@ -16,7 +16,7 @@ CREATE TABLE auth_credentials (
                                       PRIMARY KEY (id),
 
                                   CONSTRAINT fk_auth_credentials_user
-                                      REFERENCES auth_users(id)
+                                      FOREIGN KEY (user_id) REFERENCES auth_users(id)
                                           ON DELETE CASCADE,       -- if AuthUser is deleted, credentials go too
 
     -- One credential per login method per email.

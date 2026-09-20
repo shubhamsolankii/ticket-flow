@@ -1,0 +1,34 @@
+# Local development overrides.
+# Activated by: mvn spring-boot:run -Dspring-boot.run.profiles=local
+# Contains NO secrets — actual passwords match .env defaults for local dev.
+# Never commit real production credentials here.
+
+spring:
+  datasource:
+    url: jdbc:postgresql://localhost:5432/auth_db
+    username: auth_user
+    password: auth_pass_local
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password: redis_pass_local
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+# More verbose logging for local development
+logging:
+  level:
+    com.ticketflow: DEBUG
+    org.flywaydb: INFO
+    org.springframework.security: DEBUG
+
+# Add under the existing content in application-local.yml
+
+# Disable OTel export in local dev — no Jaeger running locally yet.
+# OTel is added to docker-compose when we set up the observability stack.
+otel:
+  sdk:
+    disabled: true

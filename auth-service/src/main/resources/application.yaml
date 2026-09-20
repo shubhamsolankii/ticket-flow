@@ -24,6 +24,8 @@ server:
     include-stacktrace: never    # stack traces are logged, never returned to caller
 
 spring:
+  profiles:
+    active: local
   application:
     name: auth-service           # Used by Eureka, Config Server, and distributed tracing
 
