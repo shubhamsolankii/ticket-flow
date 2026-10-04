@@ -1,0 +1,336 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+         https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- =========================================================
+         PARENT — manages all Spring dependency versions.
+         Never override Spring-managed versions without a reason.
+    ========================================================= -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>3.3.4</version>
+        <relativePath/>
+    </parent>
+
+    <!-- =========================================================
+         PROJECT COORDINATES
+         Group follows reverse-domain convention.
+         Artifact = service name, lowercase-hyphenated.
+         Version = 1.0.0-SNAPSHOT during active development.
+         Packaging = jar (fat JAR via spring-boot-maven-plugin).
+    ========================================================= -->
+    <groupId>com.ticketflow</groupId>
+    <artifactId>auth-service</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+    <name>auth-service</name>
+    <description>TicketFlow Authentication Service</description>
+
+    <!-- =========================================================
+         PROPERTIES
+         java.version drives the maven compiler plugin via parent.
+         All other version pins are for non-Spring dependencies
+         that the parent does not manage.
+    ========================================================= -->
+    <properties>
+        <java.version>21</java.version>
+        <!-- JJWT 0.12.x — API changed significantly from 0.11.x.
+             All three jjwt artifacts must be on the SAME version. -->
+        <jjwt.version>0.12.6</jjwt.version>
+        <!-- ULID creator — zero-dependency, thread-safe -->
+        <ulid-creator.version>5.2.0</ulid-creator.version>
+    </properties>
+
+    <dependencies>
+
+        <!-- =======================================================
+             WEB LAYER
+             spring-boot-starter-web bundles:
+               - Spring MVC (DispatcherServlet, @RestController)
+               - Embedded Tomcat
+               - Jackson (JSON serialization/deserialization)
+               - Spring Web (RestTemplate, etc.)
+             With Java 21 virtual threads enabled in application.yml,
+             Tomcat uses virtual threads for each request instead of
+             a bounded thread pool. This is our scalability lever.
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-web</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             PERSISTENCE — JPA + POSTGRESQL
+             spring-boot-starter-data-jpa bundles:
+               - Hibernate (JPA implementation)
+               - Spring Data JPA (Repository abstraction)
+               - HikariCP (connection pool — fastest in the JVM)
+             postgresql is the JDBC driver. runtime scope = not
+             needed at compile time, only when actually connecting.
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-jpa</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.postgresql</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- =======================================================
+             REDIS
+             Used for: OTP storage (5-min TTL), token blacklist,
+             distributed locks.
+             spring-boot-starter-data-redis bundles:
+               - Spring Data Redis
+               - Lettuce (async Redis client — recommended over Jedis
+                 because it is thread-safe and non-blocking)
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-data-redis</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             SECURITY
+             spring-boot-starter-security bundles:
+               - Spring Security core
+               - Spring Security web (filter chain, CSRF, etc.)
+             We configure it in application.yml + SecurityConfig.
+             For Feature 1 (Register), we use it only for BCrypt.
+             Full JWT/OAuth2 configuration comes in Feature 2+.
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             VALIDATION
+             Jakarta Bean Validation — @NotBlank, @Email, @Size, etc.
+             Applied at DTO layer via @Valid in @RestController.
+             spring-boot-starter-validation bundles the Hibernate
+             Validator (reference implementation of Jakarta Validation).
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-validation</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             JWT — io.jsonwebtoken (JJWT) 0.12.x
+             Three artifacts, always the same version:
+               - jjwt-api    : compile-time API (what you code against)
+               - jjwt-impl   : runtime implementation (how it works)
+               - jjwt-jackson : JSON serialization for JWT payload
+             runtime scope on impl + jackson = they're not needed at
+             compile time, only when building/parsing tokens at runtime.
+             RSA-256 signing — private key in auth-service only,
+             public key published via JWKS for api-gateway to verify.
+        ======================================================= -->
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-api</artifactId>
+            <version>${jjwt.version}</version>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-impl</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.jsonwebtoken</groupId>
+            <artifactId>jjwt-jackson</artifactId>
+            <version>${jjwt.version}</version>
+            <scope>runtime</scope>
+        </dependency>
+
+        <!-- =======================================================
+             ULID CREATOR
+             com.github.f4b6a3:ulid-creator
+             Thread-safe, monotonic ULID generation.
+             UlidCreator.getMonotonicUlid().toString() is the call
+             we use everywhere an entity ID is generated.
+             Monotonic variant = within the same millisecond, ULIDs
+             are still strictly ordered. Critical for B-tree index
+             performance at 100K inserts/min.
+        ======================================================= -->
+        <dependency>
+            <groupId>com.github.f4b6a3</groupId>
+            <artifactId>ulid-creator</artifactId>
+            <version>${ulid-creator.version}</version>
+        </dependency>
+
+        <!-- =======================================================
+             KAFKA
+             auth-service is a producer only.
+             Publishes: user.registered (after successful registration)
+             spring-kafka bundles the Apache Kafka client + Spring
+             integration (KafkaTemplate, @KafkaListener, etc.)
+             We bring it in now; configure producer-only in application.yml.
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             LOMBOK
+             Annotation processor — generates boilerplate at compile
+             time. Used for: @Getter, @Setter, @Builder, @NoArgsConstructor,
+             @AllArgsConstructor, @RequiredArgsConstructor, @Slf4j.
+             optional=true = does NOT propagate to downstream projects
+             that depend on auth-service as a library (not applicable
+             here, but correct practice).
+        ======================================================= -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
+        </dependency>
+
+        <!-- =======================================================
+             ACTUATOR
+             Exposes /actuator/health, /actuator/metrics,
+             /actuator/prometheus endpoints.
+             In K8s: liveness and readiness probes hit /actuator/health.
+             In Grafana: Prometheus scrapes /actuator/prometheus.
+             Prometheus metrics endpoint requires micrometer-registry-prometheus
+             (added below).
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             MICROMETER PROMETHEUS REGISTRY
+             Bridges Spring Boot Actuator metrics to Prometheus format.
+             Without this, /actuator/prometheus returns 404.
+             Prometheus scrapes this endpoint; Grafana reads Prometheus.
+        ======================================================= -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             OPENTELEMETRY TRACING
+             micrometer-tracing-bridge-otel: bridges Spring's Micrometer
+             tracing API to OpenTelemetry.
+             opentelemetry-exporter-otlp: exports spans to our
+             OpenTelemetry Collector (which forwards to Jaeger).
+             These two together = distributed traces, no code changes
+             needed per class. Every request gets a trace ID and span ID
+             automatically injected into logs and HTTP headers.
+        ======================================================= -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-exporter-otlp</artifactId>
+        </dependency>
+
+        <!-- =======================================================
+             LOGSTASH LOGBACK ENCODER
+             Converts Logback output to structured JSON.
+             This is what makes our logs machine-readable for ELK.
+             Without this, logs are plain text strings — impossible
+             to query in Kibana without regex parsing.
+             We configure this in logback-spring.xml (Step 2).
+        ======================================================= -->
+        <dependency>
+            <groupId>net.logstash.logback</groupId>
+            <artifactId>logstash-logback-encoder</artifactId>
+            <version>7.4</version>
+        </dependency>
+
+        <!-- =======================================================
+             TEST SCOPE
+             spring-boot-starter-test bundles:
+               - JUnit 5
+               - Mockito
+               - AssertJ
+               - Spring Test (MockMvc, @SpringBootTest)
+             spring-kafka-test: EmbeddedKafkaBroker for integration tests.
+             testcontainers: spins up real PostgreSQL and Redis in Docker
+             during tests — no mocking of DB behavior.
+             junit-vintage-engine excluded = we only use JUnit 5.
+        ======================================================= -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.kafka</groupId>
+            <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>postgresql</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.testcontainers</groupId>
+            <artifactId>kafka</artifactId>
+            <scope>test</scope>
+        </dependency>
+
+    </dependencies>
+
+    <!-- =========================================================
+         DEPENDENCY MANAGEMENT
+         Testcontainers BOM — manages versions for all
+         org.testcontainers artifacts so they stay in sync.
+         Without this, you manually pin each testcontainers
+         artifact version and risk compatibility mismatches.
+    ========================================================= -->
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>org.testcontainers</groupId>
+                <artifactId>testcontainers-bom</artifactId>
+                <version>1.20.1</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <build>
+        <plugins>
+            <!-- =================================================
+                 SPRING BOOT MAVEN PLUGIN
+                 Packages the application as a fat JAR — all
+                 dependencies bundled into a single executable.
+                 `java -jar auth-service-1.0.0-SNAPSHOT.jar` is
+                 the entire startup command in Docker/K8s.
+                 exclude lombok from the final JAR — it's only
+                 needed at compile time (annotation processing).
+            ================================================= -->
+            <plugin>
+                <groupId>org.springframework.boot</groupId>
+                <artifactId>spring-boot-maven-plugin</artifactId>
+                <configuration>
+                    <excludes>
+                        <exclude>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                        </exclude>
+                    </excludes>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+
+</project>

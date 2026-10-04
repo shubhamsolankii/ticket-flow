@@ -1,0 +1,341 @@
+# =============================================================================
+# TicketFlow — auth-service
+# Spring Boot 3.3.x | Java 21
+#
+# Config structure:
+#   Base document  → shared across all profiles
+#   --- (separator)
+#   local profile  → local Docker Compose dev environment
+#   --- (separator)
+#   prod profile   → K8s production (secrets via env vars)
+#
+# In K8s, environment variables injected via Secrets override any value here.
+# The pattern: ${ENV_VAR:default_value}
+#   → Uses ENV_VAR if set, falls back to default_value
+#   → Prod secrets are NEVER committed. They come from K8s Secrets.
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# BASE CONFIGURATION — applies to all profiles
+# -----------------------------------------------------------------------------
+spring:
+  application:
+    name: auth-service   # Used by Eureka for service registration,
+      # by Spring Cloud Config for config lookup,
+    # and injected into every log line as "service"
+
+  # ---------------------------------------------------------------------------
+  # JPA / HIBERNATE
+  # ---------------------------------------------------------------------------
+  jpa:
+    # CRITICAL: Open-In-View = false
+    # Prevents EntityManager from staying open during HTTP response serialization.
+    # Without this, DB connections are held for the full request lifecycle
+    # including JSON serialization — causes connection pool starvation at scale.
+    open-in-view: false
+
+    hibernate:
+      # validate: Hibernate reads DB schema, confirms it matches entities.
+      # Startup fails if they diverge. This catches migration drift early.
+      # Never use 'update' in prod — it silently alters/drops columns.
+      # 'create-drop' is overridden per profile below for local dev.
+      ddl-auto: validate
+
+    properties:
+      hibernate:
+        # PostgreSQL dialect — tells Hibernate which SQL dialect to generate.
+        # Without this, Hibernate might generate ANSI SQL that doesn't use
+        # PostgreSQL-specific features (e.g., RETURNING clause, jsonb).
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+        # Format SQL in logs for readability. Only useful in dev.
+        # Overridden to false in prod to avoid log volume explosion.
+        format_sql: true
+
+        # Default schema — all entities land in 'auth' schema, not 'public'.
+        # Namespacing by service in the same PostgreSQL instance during dev.
+        # In prod, auth-service gets its own PostgreSQL instance.
+        default_schema: auth
+
+  # ---------------------------------------------------------------------------
+  # KAFKA — Producer only
+  # auth-service publishes: user.registered
+  # auth-service consumes: nothing
+  # ---------------------------------------------------------------------------
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+
+    producer:
+      # StringSerializer for both key and value.
+      # We serialize event payloads as JSON strings manually.
+      # Alternative: Avro with Schema Registry — more type-safe but adds
+      # Schema Registry as a dependency. JSON is simpler for now; we switch
+      # to Avro when we add Schema Registry in the Kafka phase.
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.apache.kafka.common.serialization.StringSerializer
+
+      # acks=all — wait for all in-sync replicas to acknowledge the write.
+      # Guarantees durability: if broker crashes mid-write, message is not lost.
+      # Trade-off: ~5ms additional latency vs acks=1. Acceptable for our use case.
+      acks: all
+
+      # Retry on transient errors (network blip, leader election).
+      # Combined with enable.idempotence=true, retries are safe — no duplicates.
+      retries: 3
+
+      properties:
+        # Idempotent producer: Kafka assigns PID + sequence numbers.
+        # Broker deduplicates retried messages. Without this, a network
+        # retry on publish could produce a duplicate user.registered event,
+        # causing user-service to create the profile twice.
+        enable.idempotence: true
+
+        # Controls how long the producer waits to batch messages.
+        # linger.ms=5: wait up to 5ms to batch multiple messages into one request.
+        # Increases throughput at slight cost to latency. Fine for async events.
+        linger.ms: 5
+
+        # Max in-flight requests per connection when idempotence is enabled.
+        # Must be <= 5 when idempotence is on (Kafka protocol requirement).
+        max.in.flight.requests.per.connection: 5
+
+  # ---------------------------------------------------------------------------
+  # REDIS
+  # ---------------------------------------------------------------------------
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}   # Empty default for local dev (no auth)
+      timeout: 2000ms                # Connection timeout — fail fast if Redis is down
+      lettuce:
+        pool:
+          # Lettuce connection pool settings
+          max-active: 10    # Max connections in pool per pod
+          max-idle: 5       # Max idle connections kept warm
+          min-idle: 2       # Connections kept warm even when idle
+          max-wait: 1000ms  # How long to wait for a connection from pool
+
+  # ---------------------------------------------------------------------------
+  # SECURITY
+  # Spring Security auto-configures a lot. We explicitly disable what we
+  # don't want and enable what we do.
+  # Full SecurityConfig class comes in Feature 2 (Login).
+  # For Feature 1 (Register), we only need BCryptPasswordEncoder — which
+  # Spring Security provides out of the box.
+  # ---------------------------------------------------------------------------
+  security:
+    # We manage users ourselves (DB-backed). Disable the auto-generated
+    # in-memory user that Spring Security creates by default.
+    # Without this, Spring Boot prints a random password at startup and
+    # secures ALL endpoints with HTTP Basic — including our /register endpoint.
+    user:
+      name: disabled
+      password: disabled
+
+# =============================================================================
+# SERVER
+# =============================================================================
+server:
+  port: ${SERVER_PORT:8081}   # auth-service runs on 8081 locally
+  # api-gateway on 8080, other services 8082+
+  # Graceful shutdown: when K8s sends SIGTERM, Spring Boot stops accepting
+  # new requests but finishes in-flight requests before shutting down.
+  # Without this, K8s rolling deploy can kill requests mid-flight.
+  shutdown: graceful
+
+spring:
+  lifecycle:
+    timeout-per-shutdown-phase: 30s   # Max time to finish in-flight requests on shutdown
+
+  # =============================================================================
+  # VIRTUAL THREADS (Java 21)
+  # Enables virtual threads for all Tomcat request handling.
+  # Each HTTP request gets its own virtual thread instead of borrowing from
+  # a bounded OS thread pool. Blocking operations (JDBC, Redis) park the
+  # virtual thread without blocking the carrier thread.
+  # Result: massively higher concurrency with zero reactive programming.
+  # =============================================================================
+  threads:
+    virtual:
+      enabled: true
+
+# =============================================================================
+# ACTUATOR
+# Exposes health, metrics, prometheus endpoints.
+# K8s liveness/readiness probes target:
+#   /actuator/health/liveness
+#   /actuator/health/readiness
+# =============================================================================
+management:
+  endpoints:
+    web:
+      exposure:
+        # Whitelist only what we need. Never expose 'env' or 'beans' in prod —
+        # they reveal internal config, credentials structure, and classpath.
+        include: health,info,prometheus,metrics
+      base-path: /actuator
+
+  endpoint:
+    health:
+      # 'always' shows full health details (DB connection, Redis, Kafka status).
+      # In prod, change to 'when-authorized' — health details can leak
+      # infrastructure topology to attackers.
+      show-details: always
+      probes:
+        # Enables /actuator/health/liveness and /actuator/health/readiness
+        # as separate sub-paths. K8s readiness probe failing removes the pod
+        # from the load balancer (stops traffic). Liveness probe failing
+        # triggers a pod restart.
+        enabled: true
+
+  # Expose metrics in Prometheus format at /actuator/prometheus
+  prometheus:
+    metrics:
+      export:
+        enabled: true
+
+  # Tag every metric with the service name.
+  # In Grafana, filter by `application="auth-service"` to see only auth metrics.
+  metrics:
+    tags:
+      application: ${spring.application.name}
+
+  # OpenTelemetry tracing configuration
+  tracing:
+    sampling:
+      # 1.0 = 100% sampling. In prod, drop to 0.01 (1%) for success paths.
+      # 100% sampling is used locally to see every trace in Jaeger.
+      # We override this in the prod profile below.
+      probability: 1.0
+
+# =============================================================================
+# LOGGING
+# Structured JSON logging via logback-spring.xml.
+# Log levels per package — suppress noisy framework DEBUG output.
+# =============================================================================
+logging:
+  # Points Spring Boot to our custom Logback config.
+  # logback-spring.xml (not logback.xml) allows Spring Boot profile-aware
+  # logging — different appenders per profile (console for local, file for prod).
+  config: classpath:logback-spring.xml
+
+  level:
+    root: INFO
+    com.ticketflow.auth: DEBUG          # Our code — DEBUG for development
+    org.springframework.security: WARN  # Spring Security is extremely verbose at INFO
+    org.hibernate.SQL: DEBUG            # Show SQL in dev (overridden to WARN in prod)
+    org.hibernate.type: WARN            # Suppress bind parameter logging (noisy)
+    org.apache.kafka: WARN              # Kafka client logs are extremely verbose
+
+---
+# =============================================================================
+# LOCAL PROFILE — for development with Docker Compose
+# Activate with: -Dspring.profiles.active=local
+# or set SPRING_PROFILES_ACTIVE=local
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: local
+
+  datasource:
+    url: jdbc:postgresql://localhost:5432/auth_db?currentSchema=auth
+    username: ticketflow
+    password: ticketflow_local
+    driver-class-name: org.postgresql.Driver
+
+    hikari:
+      pool-name: AuthServiceHikariPool-Local
+      maximum-pool-size: 10         # Lower than prod — local machine has resource limits
+      minimum-idle: 2
+      connection-timeout: 30000     # 30s — more lenient locally
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      # Validation query — executed when a connection is borrowed from pool
+      # to confirm the DB connection is still alive. For PostgreSQL, /* ping */
+      # is the lightweight way (uses protocol-level ping, not a full query).
+      connection-test-query: SELECT 1
+
+  jpa:
+    hibernate:
+      # Local dev: recreate schema on each startup from Flyway migrations.
+      # We keep validate here too — Flyway handles DDL, Hibernate just validates.
+      ddl-auto: validate
+    properties:
+      hibernate:
+        format_sql: true   # Pretty-print SQL in local logs
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+      password:   # No password for local Redis
+
+logging:
+  level:
+    org.hibernate.SQL: DEBUG         # Show all SQL locally
+    com.ticketflow.auth: DEBUG
+
+---
+# =============================================================================
+# PROD PROFILE — K8s deployment
+# Activate with: SPRING_PROFILES_ACTIVE=prod (set in K8s Deployment manifest)
+# ALL secrets come from K8s Secrets mounted as environment variables.
+# NOTHING sensitive is hardcoded here.
+# =============================================================================
+spring:
+  config:
+    activate:
+      on-profile: prod
+
+  datasource:
+    # ${DB_URL} is injected by K8s Secret as an environment variable.
+    # Pattern: jdbc:postgresql://<RDS_ENDPOINT>:5432/auth_db?currentSchema=auth&ssl=true&sslmode=require
+    url: ${DB_URL}
+    username: ${DB_USERNAME}
+    password: ${DB_PASSWORD}
+    driver-class-name: org.postgresql.Driver
+
+    hikari:
+      pool-name: AuthServiceHikariPool-Prod
+      maximum-pool-size: 20          # System design spec: 20 per pod
+      minimum-idle: 5
+      connection-timeout: 3000       # 3s — fail fast in prod, don't queue up threads
+      idle-timeout: 600000
+      max-lifetime: 1800000
+      connection-test-query: SELECT 1
+      # Leak detection: if a connection is held for >60s, log a warning.
+      # Indicates a long-running query or a connection not being returned to pool.
+      leak-detection-threshold: 60000
+
+  jpa:
+    hibernate:
+      ddl-auto: validate   # Never 'update' or 'create' in prod
+    properties:
+      hibernate:
+        format_sql: false  # Do not format SQL in prod — log volume
+
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS}
+
+  data:
+    redis:
+      host: ${REDIS_HOST}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD}
+
+management:
+  tracing:
+    sampling:
+      probability: 0.01    # 1% sampling in prod — 100% is prohibitively expensive
+
+logging:
+  level:
+    root: INFO
+    com.ticketflow.auth: INFO        # INFO in prod — DEBUG generates too much volume
+    org.springframework.security: WARN
+    org.hibernate.SQL: WARN          # Suppress SQL in prod — sensitive data risk
