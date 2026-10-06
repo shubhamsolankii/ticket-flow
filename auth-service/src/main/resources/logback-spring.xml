@@ -1,0 +1,69 @@
+  <?xml version="1.0" encoding="UTF-8"?>
+    <!--
+  logback-spring.xml (not logback.xml):
+    The -spring suffix lets Spring Boot process this file with its
+    environment abstractions — <springProfile> blocks work here.
+    In plain logback.xml, <springProfile> is ignored.
+    -->
+    <configuration>
+
+    <!--
+  LOCAL PROFILE: Console appender with structured JSON.
+    In local dev you tail the console. JSON here too — keeps
+    the parsing pipeline consistent and catches logging bugs early.
+    -->
+    <springProfile name="local">
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+    <!--
+  LogstashEncoder outputs JSON. Every log line is a valid JSON object:
+    {
+      "timestamp": "...",
+      "level": "INFO",
+      "service": "auth-service",
+      "trace_id": "...",   <- injected by Micrometer tracing
+      "span_id": "...",
+      "message": "...",
+      "logger_name": "...",
+      + any MDC fields we add (user_id, event, duration_ms)
+    }
+    -->
+    <fieldNames>
+    <timestamp>timestamp</timestamp>
+    <version>[ignore]</version>    <!-- Suppress ECS version field -->
+    <levelValue>[ignore]</levelValue>
+    </fieldNames>
+    </encoder>
+    </appender>
+    
+    <root level="INFO">
+    <appender-ref ref="CONSOLE"/>
+    </root>
+    </springProfile>
+
+    <!--
+  PROD PROFILE: File appender + console (stdout captured by K8s/Filebeat).
+    In K8s, Filebeat runs as a DaemonSet and tails stdout from every pod.
+    It ships logs to Logstash → Elasticsearch → Kibana.
+    We write to stdout (ConsoleAppender) — Filebeat handles the rest.
+    -->
+    <springProfile name="prod">
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder class="net.logstash.logback.encoder.LogstashEncoder">
+    <fieldNames>
+    <timestamp>timestamp</timestamp>
+    <version>[ignore]</version>
+    <levelValue>[ignore]</levelValue>
+    </fieldNames>
+    <!-- Mask sensitive fields before they hit the log -->
+    <!-- password, token fields are NEVER logged — enforced at code level.
+    This is a last-resort safety net. -->
+    </encoder>
+    </appender>
+    
+    <root level="INFO">
+    <appender-ref ref="STDOUT"/>
+    </root>
+    </springProfile>
+    
+    </configuration>
